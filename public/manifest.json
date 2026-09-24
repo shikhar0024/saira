@@ -1,0 +1,10 @@
+{
+  "name": "Saira - Shikhar's Personal Assistant",
+  "short_name": "Saira",
+  "description": "Shikhar's personal AI assistant",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#111827",
+  "orientation": "portrait"
+}

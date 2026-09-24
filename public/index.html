@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Saira | Shikhar's Personal Assistant</title>
+
+    <link rel="stylesheet" href="/style.css">
+    <link rel="manifest" href="/manifest.json">
+</head>
+
+<body>
+
+    <div class="app">
+
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <div class="logo-circle">S</div>
+
+                <div>
+                    <h1>Saira</h1>
+                    <p>Shikhar's Personal Assistant</p>
+                </div>
+            </div>
+
+            <div class="status">
+                <span class="status-dot"></span>
+                Online
+            </div>
+        </header>
+
+
+        <!-- Main Chat Area -->
+        <main class="chat-container" id="chat">
+
+            <div class="welcome">
+                <div class="welcome-icon">✦</div>
+
+                <h2>Hello, I'm Saira.</h2>
+
+                <p>
+    I'm your personal AI assistant, built to make Shikhar's
+    everyday life simpler.
+</p>
+            </div>
+
+        </main>
+
+
+        <!-- Message Input -->
+        <div class="input-area">
+
+            <form id="chat-form">
+
+                <input
+                    type="text"
+                    id="message"
+                    placeholder="Ask Saira anything..."
+                    autocomplete="off"
+                >
+
+                <button type="submit" id="send-button">
+                    Send
+                </button>
+
+            </form>
+
+            <p class="input-hint">
+                Saira can help you with questions, information and everyday tasks.
+            </p>
+
+        </div>
+
+    </div>
+
+
+    <script src="app.js"></script>
+
+</body>
+</html>
