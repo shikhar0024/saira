@@ -14,6 +14,7 @@ const ai = new GoogleGenAI({
 
 app.use(express.json());
 let chatHistory = [];
+const MAX_HISTORY = 20;
 app.use(express.static("public"));
 
 
@@ -131,6 +132,9 @@ app.post("/api/chat", async (req, res) => {
     role: "user",
     content: message
 });
+if (chatHistory.length > MAX_HISTORY) {
+    chatHistory = chatHistory.slice(-MAX_HISTORY);
+}
         if (!message) {
             return res.status(400).json({
                 error: "Please enter a message."
