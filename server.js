@@ -13,6 +13,7 @@ const ai = new GoogleGenAI({
 });
 
 app.use(express.json());
+let chatHistory = [];
 app.use(express.static("public"));
 
 
@@ -126,6 +127,10 @@ app.post("/api/chat", async (req, res) => {
     try {
         const { message } = req.body;
 
+         chatHistory.push({
+    role: "user",
+    content: message
+});
         if (!message) {
             return res.status(400).json({
                 error: "Please enter a message."
@@ -215,22 +220,22 @@ if (
     });
 }
         // GENERAL AI CHAT
-        const response = await ai.models.generateContent({
-            model: "gemini-3.5-flash-lite",
-            contents: `
+     const response = await ai.models.generateContent({
+    model: "gemini-3.5-flash-lite",
+    contents: `
 You are Saira, Shikhar's personal AI assistant.
 
 Be friendly, intelligent, helpful, natural, conversational, clear and practical.
 
 The person you are assisting is Shikhar.
-
 When appropriate, address him as Shikhar.
 
-User message:
+Conversation history:
+${chatHistory.map(item => `${item.role}: ${item.content}`).join("\n")}
 
-${message}
+Respond to the latest user message naturally and use the conversation history when relevant.
 `
-        });
+});   
 
         res.json({
             reply: response.text
