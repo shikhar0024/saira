@@ -1,6 +1,8 @@
 require("dotenv").config();
 
 const express = require("express");
+const fs = require("fs");
+const path = require("path");
 const { GoogleGenAI } = require("@google/genai");
 const Parser = require("rss-parser");
 
@@ -14,6 +16,17 @@ const ai = new GoogleGenAI({
 
 app.use(express.json());
 let chatHistory = [];
+const memoryFile = path.join(__dirname, "data", "memory.json");
+let memories = [];
+
+try {
+    memories = JSON.parse(fs.readFileSync(memoryFile, "utf8"));
+} catch (error) {
+    memories = [];
+}
+function saveMemories() {
+    fs.writeFileSync(memoryFile, JSON.stringify(memories, null, 2));
+}
 const MAX_HISTORY = 20;
 app.use(express.static("public"));
 
@@ -128,6 +141,22 @@ app.post("/api/chat", async (req, res) => {
     try {
         const { message } = req.body;
 
+        const rememberMatch = message.match(
+    /remember(?: that)?\s+(.+)/i
+);
+console.log("Remember match:", rememberMatch);
+
+if (rememberMatch) {
+    const memory = rememberMatch[1].trim();
+
+    memories.push(memory);
+    saveMemories();
+
+    return res.json({
+        reply: `Got it, Shikhar. I'll remember that: ${memory}`
+    });
+}
+
          chatHistory.push({
     role: "user",
     content: message
@@ -236,6 +265,9 @@ When appropriate, address him as Shikhar.
 
 Conversation history:
 ${chatHistory.map(item => `${item.role}: ${item.content}`).join("\n")}
+
+Saved memories:
+${memories.join("\n")} 
 
 Respond to the latest user message naturally and use the conversation history when relevant.
 `
