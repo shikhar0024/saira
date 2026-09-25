@@ -3,6 +3,26 @@ require("dotenv").config();
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
+const { Pool } = require("pg");
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
+async function initDatabase() {
+    if (!process.env.DATABASE_URL) {
+        return;
+    }
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS memories (
+            id SERIAL PRIMARY KEY,
+            memory TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    console.log("PostgreSQL memory table is ready.");
+}
 const { GoogleGenAI } = require("@google/genai");
 const Parser = require("rss-parser");
 
@@ -17,15 +37,33 @@ const ai = new GoogleGenAI({
 app.use(express.json());
 let chatHistory = [];
 const memoryFile = path.join(__dirname, "data", "memory.json");
+
 let memories = [];
 
-try {
-    memories = JSON.parse(fs.readFileSync(memoryFile, "utf8"));
-} catch (error) {
-    memories = [];
+async function loadMemories() {
+    if (process.env.DATABASE_URL) {
+        const result = await pool.query(
+            "SELECT memory FROM memories ORDER BY id ASC"
+        );
+
+        memories = result.rows.map(row => row.memory);
+    } else {
+        try {
+            memories = JSON.parse(fs.readFileSync(memoryFile, "utf8"));
+        } catch (error) {
+            memories = [];
+        }
+    }
 }
-function saveMemories() {
-    fs.writeFileSync(memoryFile, JSON.stringify(memories, null, 2));
+async function saveMemories() {
+    if (process.env.DATABASE_URL) {
+        await pool.query(
+            "INSERT INTO memories (memory) VALUES ($1)",
+            [memories[memories.length - 1]]
+        );
+    } else {
+        fs.writeFileSync(memoryFile, JSON.stringify(memories, null, 2));
+    }
 }
 const MAX_HISTORY = 20;
 app.use(express.static("public"));
@@ -288,9 +326,14 @@ Respond to the latest user message naturally and use the conversation history wh
 // ========================================
 // START SERVER
 // ========================================
-
-app.listen(PORT, "0.0.0.0", () => {
-    console.log(
-        `Saira is running at http://localhost:${PORT}`
-    );
-});
+initDatabase()
+    .then(() => loadMemories())
+    .then(() => {
+        app.listen(PORT, "0.0.0.0", () => {
+            console.log(`Saira is running at http://localhost:${PORT}`);
+        });
+    })
+    .catch((error) => {
+        console.error("Startup error:", error);
+        process.exit(1);
+    });
