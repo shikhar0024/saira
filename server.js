@@ -178,15 +178,29 @@ app.get("/api/news", async (req, res) => {
 app.post("/api/chat", async (req, res) => {
     try {
         const { message } = req.body;
+        if (/what do you remember|what do you know about me/i.test(message)) {   
+    if (memories.length === 0) {
+        return res.json({
+            reply: "I don't have any saved memories about you yet."
+        });
+    }
+
+    return res.json({
+        reply: `Here's what I remember about you:\n\n${memories
+            .map((memory, index) => `${index + 1}. ${memory}`)
+            .join("\n")}`
+    });
+}
+        
 
         const rememberMatch = message.match(
-    /remember(?: that)?\s+(.+)/i
+    /^remember(?: that)?\s+(.+)/i
 );
-console.log("Remember match:", rememberMatch);
 
 if (rememberMatch) {
     const memory = rememberMatch[1].trim();
 
+    console.log("ADDING MEMORY:", memory);
     memories.push(memory);
     saveMemories();
 
@@ -329,6 +343,29 @@ Respond to the latest user message naturally and use the conversation history wh
 initDatabase()
     .then(() => loadMemories())
     .then(() => {
+        app.post("/api/admin/clear-memory", async (req, res) => {
+    try {
+        if (req.headers["x-saira-cleanup"] !== "clear-old-memories-2026") {
+            return res.status(403).json({ error: "Unauthorized" });
+        }
+
+        if (!process.env.DATABASE_URL) {
+            return res.status(400).json({ error: "Database is not connected." });
+        }
+
+        const result = await pool.query("DELETE FROM memories");
+
+        memories = [];
+
+        res.json({
+            success: true,
+            deleted: result.rowCount
+        });
+    } catch (error) {
+        console.error("Memory cleanup error:", error);
+        res.status(500).json({ error: "Could not clear memories." });
+    }
+});
         app.listen(PORT, "0.0.0.0", () => {
             console.log(`Saira is running at http://localhost:${PORT}`);
         });
@@ -337,3 +374,4 @@ initDatabase()
         console.error("Startup error:", error);
         process.exit(1);
     });
+   
