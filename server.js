@@ -1,52 +1,66 @@
 require("dotenv").config();
-
 const express = require("express");
+const basicAuth = require("express-basic-auth");
 const fs = require("fs");
 const path = require("path");
 const { Pool } = require("pg");
-const pool = new Pool({
-    connectionString: process.env.DATABASE_URL,
-    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
-async function initDatabase() {
-    if (!process.env.DATABASE_URL) {
-        return;
-    }
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS memories (
-            id SERIAL PRIMARY KEY,
-            memory TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    `);
-
-    console.log("PostgreSQL memory table is ready.");
-}
 const { GoogleGenAI } = require("@google/genai");
 const Parser = require("rss-parser");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Gemini
+// Security: Personal Access Authentication
+app.use(basicAuth({
+    users: { 'Shikhar': 'saira_secure_2026' }, // Change your password here if desired
+    challenge: true,
+    realm: 'Saira AI Personal Access'
+}));
+
+app.use(express.json());
+app.use(express.static("public"));
+
+// PostgreSQL or fallback JSON setup for memories
+const pool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
+
+async function initDatabase() {
+    if (!process.env.DATABASE_URL) {
+        return;
+    }
+    try {
+        await pool.query(`
+            CREATE TABLE IF NOT EXISTS memories (
+                id SERIAL PRIMARY KEY,
+                memory TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+        `);
+        console.log("PostgreSQL memory table is ready.");
+    } catch (error) {
+        console.error("Database initialization error:", error);
+    }
+}
+initDatabase();
+
+// Gemini Client
 const ai = new GoogleGenAI({
     apiKey: process.env.GEMINI_API_KEY
 });
 
-app.use(express.json());
-let chatHistory = [];
 const memoryFile = path.join(__dirname, "data", "memory.json");
-
 let memories = [];
 
 async function loadMemories() {
     if (process.env.DATABASE_URL) {
-        const result = await pool.query(
-            "SELECT memory FROM memories ORDER BY id ASC"
-        );
-
-        memories = result.rows.map(row => row.memory);
+        try {
+            const result = await pool.query("SELECT memory FROM memories ORDER BY id ASC");
+            memories = result.rows.map(row => row.memory);
+        } catch (error) {
+            console.error("Error loading from DB:", error);
+        }
     } else {
         try {
             memories = JSON.parse(fs.readFileSync(memoryFile, "utf8"));
@@ -55,64 +69,52 @@ async function loadMemories() {
         }
     }
 }
+loadMemories();
+
 async function saveMemories() {
     if (process.env.DATABASE_URL) {
-        await pool.query(
-            "INSERT INTO memories (memory) VALUES ($1)",
-            [memories[memories.length - 1]]
-        );
+        try {
+            await pool.query(
+                "INSERT INTO memories (memory) VALUES ($1)",
+                [memories[memories.length - 1]]
+            );
+        } catch (error) {
+            console.error("Error saving to DB:", error);
+        }
     } else {
-        fs.writeFileSync(memoryFile, JSON.stringify(memories, null, 2));
+        try {
+            if (!fs.existsSync(path.dirname(memoryFile))) {
+                fs.mkdirSync(path.dirname(memoryFile), { recursive: true });
+            }
+            fs.writeFileSync(memoryFile, JSON.stringify(memories, null, 2));
+        } catch (error) {
+            console.error("Error saving to file:", error);
+        }
     }
 }
-const MAX_HISTORY = 20;
-app.use(express.static("public"));
 
-
-// ========================================
+// ==========================================
 // HEALTH CHECK
-// ========================================
-
+// ==========================================
 app.get("/api/health", (req, res) => {
-    res.json({
-        status: "ok",
-        message: "Saira is running!"
-    });
+    res.json({ status: "ok", message: "Saira is running!" });
 });
 
-
-// ========================================
-// WEATHER
-// ========================================
-
+// ==========================================
+// WEATHER API
+// ==========================================
 app.get("/api/weather", async (req, res) => {
-
     try {
-
         const city = req.query.city || "Mumbai";
-
-        // Find city coordinates
-        const geoResponse = await fetch(
-            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`
-        );
-
+        const geoResponse = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`);
         const geoData = await geoResponse.json();
 
         if (!geoData.results || geoData.results.length === 0) {
-
-            return res.status(404).json({
-                error: `I couldn't find the city "${city}".`
-            });
-
+            return res.status(404).json({ error: `I couldn't find the city "${city}".` });
         }
 
         const location = geoData.results[0];
-
-        // Get current weather
-        const weatherResponse = await fetch(
-            `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&timezone=auto`
-        );
-
+        const weatherResponse = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,wind_speed_10m,weather_code`);
         const weatherData = await weatherResponse.json();
 
         res.json({
@@ -126,252 +128,86 @@ app.get("/api/weather", async (req, res) => {
             weatherCode: weatherData.current.weather_code,
             time: weatherData.current.time
         });
-
     } catch (error) {
-
         console.error("Weather Error:", error);
-
-        res.status(500).json({
-            error: "I couldn't get the weather right now."
-        });
-
+        res.status(500).json({ error: "I couldn't get the weather right now." });
     }
-
 });
 
-
-// ========================================
-// CHAT WITH SAIRA
-// ========================================
-// NEWS
+// ==========================================
+// NEWS API
+// ==========================================
 app.get("/api/news", async (req, res) => {
     try {
         const query = req.query.topic || "India";
-
         const parser = new Parser();
-
-        const feedUrl =
-            `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
-
+        const feedUrl = `https://news.google.com/rss/search?q=${encodeURIComponent(query)}&hl=en-IN&gl=IN&ceid=IN:en`;
         const feed = await parser.parseURL(feedUrl);
 
-        const articles = feed.items.slice(0, 5).map((item) => ({
+        const articles = feed.items.slice(0, 5).map(item => ({
             title: item.title,
             link: item.link,
             published: item.pubDate
         }));
 
-        res.json({
-            topic: query,
-            articles
-        });
-
+        res.json({ topic: query, articles });
     } catch (error) {
         console.error("News Error:", error);
-
-        res.status(500).json({
-            error: "I couldn't get the latest news right now."
-        });
+        res.status(500).json({ error: "I couldn't fetch the news right now." });
     }
 });
-// CHAT
+
+// ==========================================
+// CHAT WITH SAIRA (GEMINI AI)
+// ==========================================
 app.post("/api/chat", async (req, res) => {
     try {
-        const { message } = req.body;
-        if (/what do you remember|what do you know about me/i.test(message)) {   
-    if (memories.length === 0) {
-        return res.json({
-            reply: "I don't have any saved memories about you yet."
-        });
-    }
+        const userMessage = req.body.message;
+        if (!userMessage) {
+            return res.status(400).json({ error: "Message is required." });
+        }
 
-    return res.json({
-        reply: `Here's what I remember about you:\n\n${memories
-            .map((memory, index) => `${index + 1}. ${memory}`)
-            .join("\n")}`
-    });
-}
+        const lowerMsg = userMessage.toLowerCase();
         
-
-        const rememberMatch = message.match(
-    /^remember(?: that)?\s+(.+)/i
-);
-
-if (rememberMatch) {
-    const memory = rememberMatch[1].trim();
-
-    console.log("ADDING MEMORY:", memory);
-    memories.push(memory);
-    saveMemories();
-
-    return res.json({
-        reply: `Got it, Shikhar. I'll remember that: ${memory}`
-    });
-}
-
-         chatHistory.push({
-    role: "user",
-    content: message
-});
-if (chatHistory.length > MAX_HISTORY) {
-    chatHistory = chatHistory.slice(-MAX_HISTORY);
-}
-        if (!message) {
-            return res.status(400).json({
-                error: "Please enter a message."
-            });
-        }
-
-        // WEATHER QUESTIONS
-       const weatherMatch = message.match(
-    /weather\s+(?:in|at|for)\s+([a-zA-Z\s]+?)(?:\?|$)/i
-);
-
-if (weatherMatch) {
-    const city = weatherMatch[1].trim();
-
-            const geoResponse = await fetch(
-                `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=en&format=json`
-            );
-
-            const geoData = await geoResponse.json();
-
-            if (!geoData.results || geoData.results.length === 0) {
-                return res.json({
-                    reply: `I couldn't find weather information for ${city}.`
-                });
+        // Handle Memory Recall Requests
+        if (lowerMsg.includes("what do you remember") || lowerMsg.includes("my details") || lowerMsg.includes("what do you know about me")) {
+            if (memories.length === 0) {
+                return res.json({ reply: "I don't have any specific memories saved about you yet, Shikhar. Tell me something important and I'll remember it!" });
             }
-
-            const location = geoData.results[0];
-
-            const weatherResponse = await fetch(
-                `https://api.open-meteo.com/v1/forecast?latitude=${location.latitude}&longitude=${location.longitude}&current=temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m&timezone=auto`
-            );
-
-            const weatherData = await weatherResponse.json();
-            const current = weatherData.current;
-
-            return res.json({
-                reply: `The current weather in ${location.name}, ${location.country} is ${current.temperature_2m}°C, with a feels-like temperature of ${current.apparent_temperature}°C. Humidity is ${current.relative_humidity_2m}% and wind speed is ${current.wind_speed_10m} km/h.`
-            });
+            return res.json({ reply: `Here is what I remember about you, Shikhar:\n• ` + memories.join("\n• ") });
         }
-// NEWS QUESTIONS
-const newsMatch = message.match(
-    /(?:latest|today'?s|recent|current)\s+(.*?)(?:\s+)?news/i
-);
 
-if (
-    newsMatch ||
-    /what'?s happening|what is happening|news today|current affairs/i.test(message)
-) {
-    let topic = "India";
+        // Handle Memory Saving Requests
+        const rememberMatch = userMessage.match(/remember that (.+)/i);
+        if (rememberMatch) {
+            const newMemory = rememberMatch[1].trim();
+            memories.push(newMemory);
+            await saveMemories();
+            return res.json({ reply: `Got it, Shikhar. I've noted that down: "${newMemory}".` });
+        }
 
-    if (newsMatch && newsMatch[1]) {
-        topic = newsMatch[1].trim();
-    }
+        // Build System Prompt & Memory Context
+        const memoryContext = memories.length > 0 ? `\n\nThings you remember about Shikhar:\n- ${memories.join("\n- ")}` : "";
+        const systemPrompt = `You are Saira, Shikhar's personal AI assistant, inspired by JARVIS. Be friendly, intelligent, helpful, conversational, clear, and practical. The person you're assisting is Shikhar. Address him as Shikhar when appropriate.${memoryContext}`;
 
-    // Clean common words
-    topic = topic
-        .replace(/\b(in|from|about|on)\b/gi, "")
-        .trim();
-
-    if (!topic || topic.length < 2) {
-        topic = "India";
-    }
-
-    const parser = new Parser();
-
-    const feedUrl =
-        `https://news.google.com/rss/search?q=${encodeURIComponent(topic)}&hl=en-IN&gl=IN&ceid=IN:en`;
-
-    const feed = await parser.parseURL(feedUrl);
-
-    const articles = feed.items.slice(0, 5);
-
-    if (articles.length === 0) {
-        return res.json({
-            reply: `I couldn't find any recent news about ${topic}.`
+        // Call Gemini AI
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: [
+                { role: 'user', parts: [{ text: systemPrompt + "\n\nUser: " + userMessage }] }
+            ]
         });
-    }
 
-    let reply = `Here are the latest news headlines about ${topic}:\n\n`;
-
-    articles.forEach((article, index) => {
-        reply += `${index + 1}. ${article.title}\n`;
-    });
-
-    return res.json({
-        reply
-    });
-}
-        // GENERAL AI CHAT
-     const response = await ai.models.generateContent({
-    model: "gemini-3.5-flash-lite",
-    contents: `
-You are Saira, Shikhar's personal AI assistant.
-
-Be friendly, intelligent, helpful, natural, conversational, clear and practical.
-
-The person you are assisting is Shikhar.
-When appropriate, address him as Shikhar.
-
-Conversation history:
-${chatHistory.map(item => `${item.role}: ${item.content}`).join("\n")}
-
-Saved memories:
-${memories.join("\n")} 
-
-Respond to the latest user message naturally and use the conversation history when relevant.
-`
-});   
-
-        res.json({
-            reply: response.text
-        });
+        const reply = response.text || "I am here, Shikhar.";
+        res.json({ reply });
 
     } catch (error) {
         console.error("Chat Error:", error);
-
-        res.status(500).json({
-            error: "Saira could not process your request."
-        });
+        res.status(500).json({ error: "Saira encountered an error processing your request." });
     }
 });
-// ========================================
-// START SERVER
-// ========================================
-initDatabase()
-    .then(() => loadMemories())
-    .then(() => {
-        app.post("/api/admin/clear-memory", async (req, res) => {
-    try {
-        if (req.headers["x-saira-cleanup"] !== "clear-old-memories-2026") {
-            return res.status(403).json({ error: "Unauthorized" });
-        }
 
-        if (!process.env.DATABASE_URL) {
-            return res.status(400).json({ error: "Database is not connected." });
-        }
-
-        const result = await pool.query("DELETE FROM memories");
-
-        memories = [];
-
-        res.json({
-            success: true,
-            deleted: result.rowCount
-        });
-    } catch (error) {
-        console.error("Memory cleanup error:", error);
-        res.status(500).json({ error: "Could not clear memories." });
-    }
+// Start Server
+app.listen(PORT, () => {
+    console.log(`Saira is running at http://localhost:${PORT}`);
 });
-        app.listen(PORT, "0.0.0.0", () => {
-            console.log(`Saira is running at http://localhost:${PORT}`);
-        });
-    })
-    .catch((error) => {
-        console.error("Startup error:", error);
-        process.exit(1);
-    });
-   
